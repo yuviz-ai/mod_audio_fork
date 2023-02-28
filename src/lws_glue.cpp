@@ -563,6 +563,9 @@ extern "C" {
             frame.buflen = available = pAudioPipe->binarySpaceAvailable();
             frame.data = pAudioPipe->binaryWritePtr();
             dirty = true;
+  switch_core_session_write_frame(session, &frame, SWITCH_IO_FLAG_NONE, 0);
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,"switch_core_session_write_frame")
+
           }
         }
       }

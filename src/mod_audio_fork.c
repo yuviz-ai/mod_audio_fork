@@ -24,9 +24,6 @@ static void responseHandler(switch_core_session_t* session, const char * eventNa
 	if (json) switch_event_add_body(event, "%s", json);
 	switch_event_fire(&event);
 
-  switch_core_session_write_frame(session, &frame, SWITCH_IO_FLAG_NONE, 0);
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,"switch_core_session_write_frame")
-
 }
 
 static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type)
