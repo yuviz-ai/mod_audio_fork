@@ -1,4 +1,4 @@
-/* 
+/*
  *
  * mod_audio_fork.c -- Freeswitch module for forking audio to remote server over websockets
  *
@@ -23,6 +23,10 @@ static void responseHandler(switch_core_session_t* session, const char * eventNa
 	switch_channel_event_set_data(channel, event);
 	if (json) switch_event_add_body(event, "%s", json);
 	switch_event_fire(&event);
+
+  switch_core_session_write_frame(session, &frame, SWITCH_IO_FLAG_NONE, 0);
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,"switch_core_session_write_frame")
+
 }
 
 static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, switch_abc_type_t type)
@@ -39,7 +43,7 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
       fork_session_cleanup(session, NULL, 1);
 		}
 		break;
-	
+
 	case SWITCH_ABC_TYPE_READ:
 		return fork_frame(session, bug);
 		break;
@@ -52,14 +56,14 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
 	return SWITCH_TRUE;
 }
 
-static switch_status_t start_capture(switch_core_session_t *session, 
-        switch_media_bug_flag_t flags, 
+static switch_status_t start_capture(switch_core_session_t *session,
+        switch_media_bug_flag_t flags,
         char* host,
-        unsigned int port, 
+        unsigned int port,
         char* path,
         int sampling,
         int sslFlags,
-	      char* metadata, 
+	      char* metadata,
         const char* base)
 {
 	switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -70,8 +74,8 @@ static switch_status_t start_capture(switch_core_session_t *session,
 	void *pUserData = NULL;
   int channels = (flags & SMBF_STEREO) ? 2 : 1;
 
-	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, 
-    "mod_audio_fork: streaming %d sampling to %s path %s port %d tls: %s.\n", 
+	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,
+    "mod_audio_fork: streaming %d sampling to %s path %s port %d tls: %s.\n",
     sampling, host, path, port, sslFlags ? "yes" : "no");
 
 	if (switch_channel_get_private(channel, MY_BUG_NAME)) {
@@ -87,7 +91,7 @@ static switch_status_t start_capture(switch_core_session_t *session,
 	}
 
 	switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "calling fork_session_init.\n");
-	if (SWITCH_STATUS_FALSE == fork_session_init(session, responseHandler, read_codec->implementation->actual_samples_per_second, 
+	if (SWITCH_STATUS_FALSE == fork_session_init(session, responseHandler, read_codec->implementation->actual_samples_per_second,
 		host, port, path, sampling, sslFlags, channels, metadata, &pUserData)) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error initializing mod_audio_fork session.\n");
 		return SWITCH_STATUS_FALSE;
@@ -230,7 +234,7 @@ SWITCH_STANDARD_API(fork_function)
           switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "invalid websocket uri: %s\n", argv[2]);
         }
 				else if (sampling % 8000 != 0) {
-          switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "invalid sample rate: %s\n", argv[4]);					
+          switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "invalid sample rate: %s\n", argv[4]);
 				}
         else {
           status = start_capture(lsession, flags, host, port, path, sampling, sslFlags, metadata, "mod_audio_fork");

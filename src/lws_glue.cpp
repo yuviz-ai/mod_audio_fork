@@ -576,8 +576,6 @@ extern "C" {
             spx_uint32_t out_len = available >> 1;  // space for samples which are 2 bytes
             spx_uint32_t in_len = frame.samples;
 
-            switch_core_session_write_frame(session, &frame, SWITCH_IO_FLAG_NONE, 0);
-
             speex_resampler_process_interleaved_int(tech_pvt->resampler,
               (const spx_int16_t *) frame.data,
               (spx_uint32_t *) &in_len,
