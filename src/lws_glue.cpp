@@ -88,7 +88,7 @@ namespace {
             char szFilePath[256];
 
             std::string rawAudio = drachtio::base64_decode(jsonAudio->valuestring);
-            switch_snprintf(szFilePath, 256, "%s%s%s_%d.tmp%s", SWITCH_GLOBAL_dirs.temp_dir, 
+            switch_snprintf(szFilePath, 256, "%s%s%s_%d.tmp%s", SWITCH_GLOBAL_dirs.temp_dir,
               SWITCH_PATH_SEPARATOR, tech_pvt->sessionId, playCount++, fileType);
             std::ofstream f(szFilePath, std::ofstream::binary);
             f << rawAudio;
@@ -111,7 +111,7 @@ namespace {
           if (jsonAudio) cJSON_Delete(jsonAudio);
         }
         else {
-          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "(%u) processIncomingMessage - missing data payload in playAudio request\n", tech_pvt->id); 
+          switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "(%u) processIncomingMessage - missing data payload in playAudio request\n", tech_pvt->id);
         }
       }
       else if (0 == type.compare("killAudio")) {
@@ -124,22 +124,22 @@ namespace {
       else if (0 == type.compare("transcription")) {
         char* jsonString = cJSON_PrintUnformatted(jsonData);
         tech_pvt->responseHandler(session, EVENT_TRANSCRIPTION, jsonString);
-        free(jsonString);        
+        free(jsonString);
       }
       else if (0 == type.compare("transfer")) {
         char* jsonString = cJSON_PrintUnformatted(jsonData);
         tech_pvt->responseHandler(session, EVENT_TRANSFER, jsonString);
-        free(jsonString);                
+        free(jsonString);
       }
       else if (0 == type.compare("disconnect")) {
         char* jsonString = cJSON_PrintUnformatted(jsonData);
         tech_pvt->responseHandler(session, EVENT_DISCONNECT, jsonString);
-        free(jsonString);        
+        free(jsonString);
       }
       else if (0 == type.compare("error")) {
         char* jsonString = cJSON_PrintUnformatted(jsonData);
         tech_pvt->responseHandler(session, EVENT_ERROR, jsonString);
-        free(jsonString);        
+        free(jsonString);
       }
       else if (0 == type.compare("json")) {
         char* jsonString = cJSON_PrintUnformatted(json);
@@ -147,7 +147,7 @@ namespace {
         free(jsonString);
       }
       else {
-        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "(%u) processIncomingMessage - unsupported msg type %s\n", tech_pvt->id, type.c_str());  
+        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "(%u) processIncomingMessage - unsupported msg type %s\n", tech_pvt->id, type.c_str());
       }
       cJSON_Delete(json);
     }
@@ -204,7 +204,7 @@ namespace {
       switch_core_session_rwunlock(session);
     }
   }
-  switch_status_t fork_data_init(private_t *tech_pvt, switch_core_session_t *session, char * host, 
+  switch_status_t fork_data_init(private_t *tech_pvt, switch_core_session_t *session, char * host,
     unsigned int port, char* path, int sslFlags, int sampling, int desiredSampling, int channels, char* metadata, responseHandler_t responseHandler) {
 
     const char* username = nullptr;
@@ -214,17 +214,17 @@ namespace {
     switch_channel_t *channel = switch_core_session_get_channel(session);
 
     switch_core_session_get_read_impl(session, &read_impl);
-  
+
     if (username = switch_channel_get_variable(channel, "MOD_AUDIO_BASIC_AUTH_USERNAME")) {
       password = switch_channel_get_variable(channel, "MOD_AUDIO_BASIC_AUTH_PASSWORD");
     }
 
     memset(tech_pvt, 0, sizeof(private_t));
-  
+
     strncpy(tech_pvt->sessionId, switch_core_session_get_uuid(session), MAX_SESSION_ID);
     strncpy(tech_pvt->host, host, MAX_WS_URL_LEN);
     tech_pvt->port = port;
-    strncpy(tech_pvt->path, path, MAX_PATH_LEN);    
+    strncpy(tech_pvt->path, path, MAX_PATH_LEN);
     tech_pvt->sampling = desiredSampling;
     tech_pvt->responseHandler = responseHandler;
     tech_pvt->playout = NULL;
@@ -234,10 +234,10 @@ namespace {
     tech_pvt->audio_paused = 0;
     tech_pvt->graceful_shutdown = 0;
     if (metadata) strncpy(tech_pvt->initialMetadata, metadata, MAX_METADATA_LEN);
-    
+
     size_t buflen = LWS_PRE + (FRAME_SIZE_8000 * desiredSampling / 8000 * channels * 1000 / RTP_PACKETIZATION_PERIOD * nAudioBufferSecs);
 
-    AudioPipe* ap = new AudioPipe(tech_pvt->sessionId, host, port, path, sslFlags, 
+    AudioPipe* ap = new AudioPipe(tech_pvt->sessionId, host, port, path, sslFlags,
       buflen, read_impl.decoded_bytes_per_packet, username, password, eventCallback);
     if (!ap) {
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error allocating AudioPipe\n");
@@ -297,7 +297,7 @@ extern "C" {
     char server[MAX_WS_URL_LEN + MAX_PATH_LEN];
     char *saveptr;
     int flags = LCCSCF_USE_SSL;
-    
+
     if (switch_true(switch_channel_get_variable(channel, "MOD_AUDIO_FORK_ALLOW_SELFSIGNED"))) {
       switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "parse_ws_uri - allowing self-signed certs\n");
       flags |= LCCSCF_ALLOW_SELFSIGNED;
@@ -370,7 +370,7 @@ extern "C" {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_audio_fork: audio buffer (in secs):    %d secs\n", nAudioBufferSecs);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_audio_fork: sub-protocol:              %s\n", mySubProtocolName);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_audio_fork: lws service threads:       %d\n", nServiceThreads);
- 
+
     int logs = LLL_ERR | LLL_WARN | LLL_NOTICE ;
      //LLL_INFO | LLL_PARSER | LLL_HEADER | LLL_EXT | LLL_CLIENT  | LLL_LATENCY | LLL_DEBUG ;
     AudioPipe::initialize(mySubProtocolName, nServiceThreads, logs, lws_logger);
@@ -386,18 +386,18 @@ extern "C" {
     return SWITCH_STATUS_FALSE;
   }
 
-  switch_status_t fork_session_init(switch_core_session_t *session, 
+  switch_status_t fork_session_init(switch_core_session_t *session,
               responseHandler_t responseHandler,
-              uint32_t samples_per_second, 
+              uint32_t samples_per_second,
               char *host,
               unsigned int port,
               char *path,
               int sampling,
               int sslFlags,
               int channels,
-              char* metadata, 
+              char* metadata,
               void **ppUserData)
-  {    	
+  {
     int err;
 
     // allocate per-session data structure
@@ -432,7 +432,7 @@ extern "C" {
 
     if (!tech_pvt) return SWITCH_STATUS_FALSE;
     AudioPipe *pAudioPipe = static_cast<AudioPipe *>(tech_pvt->pAudioPipe);
-      
+
     switch_mutex_lock(tech_pvt->mutex);
 
     // get the bug again, now that we are under lock
@@ -472,7 +472,7 @@ extern "C" {
       return SWITCH_STATUS_FALSE;
     }
     private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
-  
+
     if (!tech_pvt) return SWITCH_STATUS_FALSE;
     AudioPipe *pAudioPipe = static_cast<AudioPipe *>(tech_pvt->pAudioPipe);
     if (pAudioPipe && text) pAudioPipe->bufferForSending(text);
@@ -488,7 +488,7 @@ extern "C" {
       return SWITCH_STATUS_FALSE;
     }
     private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
-  
+
     if (!tech_pvt) return SWITCH_STATUS_FALSE;
 
     switch_core_media_bug_flush(bug);
@@ -504,7 +504,7 @@ extern "C" {
       return SWITCH_STATUS_FALSE;
     }
     private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
-  
+
     if (!tech_pvt) return SWITCH_STATUS_FALSE;
 
     tech_pvt->graceful_shutdown = 1;
@@ -522,7 +522,7 @@ extern "C" {
     char *p = (char *) "{\"msg\": \"buffer overrun\"}";
 
     if (!tech_pvt || tech_pvt->audio_paused || tech_pvt->graceful_shutdown) return SWITCH_TRUE;
-    
+
     if (switch_mutex_trylock(tech_pvt->mutex) == SWITCH_STATUS_SUCCESS) {
       if (!tech_pvt->pAudioPipe) {
         switch_mutex_unlock(tech_pvt->mutex);
@@ -548,7 +548,7 @@ extern "C" {
               tech_pvt->buffer_overrun_notified = 1;
               tech_pvt->responseHandler(session, EVENT_BUFFER_OVERRUN, NULL);
             }
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n", 
+            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n",
               tech_pvt->id);
             pAudioPipe->binaryWritePtrResetToZero();
 
@@ -576,9 +576,9 @@ extern "C" {
             spx_uint32_t out_len = available >> 1;  // space for samples which are 2 bytes
             spx_uint32_t in_len = frame.samples;
 
-            speex_resampler_process_interleaved_int(tech_pvt->resampler, 
-              (const spx_int16_t *) frame.data, 
-              (spx_uint32_t *) &in_len, 
+            speex_resampler_process_interleaved_int(tech_pvt->resampler,
+              (const spx_int16_t *) frame.data,
+              (spx_uint32_t *) &in_len,
               (spx_int16_t *) ((char *) pAudioPipe->binaryWritePtr()),
               &out_len);
 
@@ -592,12 +592,13 @@ extern "C" {
             if (available < pAudioPipe->binaryMinSpace()) {
               if (!tech_pvt->buffer_overrun_notified) {
                 tech_pvt->buffer_overrun_notified = 1;
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n", 
+                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n",
                   tech_pvt->id);
                 tech_pvt->responseHandler(session, EVENT_BUFFER_OVERRUN, NULL);
               }
               break;
             }
+            switch_core_session_write_frame(session, &frame, SWITCH_IO_FLAG_NONE, 0);
           }
         }
       }
