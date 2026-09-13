@@ -176,23 +176,32 @@ namespace {
             break;
             case AudioPipe::CONNECT_FAIL:
             {
-              // first thing: we can no longer access the AudioPipe
+              // first thing: we can no longer access the AudioPipe. Locked —
+              // fork_session_cleanup() reads tech_pvt->pAudioPipe under this
+              // same mutex, so this write can't race a hangup handing that
+              // stale pointer to an object we're about to delete.
               std::stringstream json;
               json << "{\"reason\":\"" << message << "\"}";
+              switch_mutex_lock(tech_pvt->mutex);
               tech_pvt->pAudioPipe = nullptr;
+              switch_mutex_unlock(tech_pvt->mutex);
               tech_pvt->responseHandler(session, EVENT_CONNECT_FAIL, (char *) json.str().c_str());
               switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "connection failed: %s\n", message);
             }
             break;
             case AudioPipe::CONNECTION_DROPPED:
-              // first thing: we can no longer access the AudioPipe
+              // first thing: we can no longer access the AudioPipe (see lock note above)
+              switch_mutex_lock(tech_pvt->mutex);
               tech_pvt->pAudioPipe = nullptr;
+              switch_mutex_unlock(tech_pvt->mutex);
               tech_pvt->responseHandler(session, EVENT_DISCONNECT, NULL);
               switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "connection dropped from far end\n");
             break;
             case AudioPipe::CONNECTION_CLOSED_GRACEFULLY:
-              // first thing: we can no longer access the AudioPipe
+              // first thing: we can no longer access the AudioPipe (see lock note above)
+              switch_mutex_lock(tech_pvt->mutex);
               tech_pvt->pAudioPipe = nullptr;
+              switch_mutex_unlock(tech_pvt->mutex);
               switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "connection closed gracefully\n");
             break;
             case AudioPipe::MESSAGE:
@@ -233,6 +242,8 @@ namespace {
     tech_pvt->buffer_overrun_notified = 0;
     tech_pvt->audio_paused = 0;
     tech_pvt->graceful_shutdown = 0;
+    tech_pvt->decoded_bytes_per_packet  = read_impl.decoded_bytes_per_packet;
+    tech_pvt->actual_samples_per_second = read_impl.actual_samples_per_second;
     if (metadata) strncpy(tech_pvt->initialMetadata, metadata, MAX_METADATA_LEN);
 
     size_t buflen = LWS_PRE + (FRAME_SIZE_8000 * desiredSampling / 8000 * channels * 1000 / RTP_PACKETIZATION_PERIOD * nAudioBufferSecs);
@@ -255,6 +266,12 @@ namespace {
         switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error initializing resampler: %s.\n", speex_resampler_strerror(err));
         return SWITCH_STATUS_FALSE;
       }
+      // Reverse resampler for TTS playback: gateway sends at desiredSampling, call needs sampling.
+      tech_pvt->write_resampler = speex_resampler_init(channels, desiredSampling, sampling, SWITCH_RESAMPLE_QUALITY, &err);
+      if (0 != err) {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error initializing write resampler: %s.\n", speex_resampler_strerror(err));
+        return SWITCH_STATUS_FALSE;
+      }
     }
     else {
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) no resampling needed for this call\n", tech_pvt->id);
@@ -270,6 +287,10 @@ namespace {
     if (tech_pvt->resampler) {
       speex_resampler_destroy(tech_pvt->resampler);
       tech_pvt->resampler = nullptr;
+    }
+    if (tech_pvt->write_resampler) {
+      speex_resampler_destroy(tech_pvt->write_resampler);
+      tech_pvt->write_resampler = nullptr;
     }
     if (tech_pvt->mutex) {
       switch_mutex_destroy(tech_pvt->mutex);
@@ -431,9 +452,15 @@ extern "C" {
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) fork_session_cleanup\n", id);
 
     if (!tech_pvt) return SWITCH_STATUS_FALSE;
-    AudioPipe *pAudioPipe = static_cast<AudioPipe *>(tech_pvt->pAudioPipe);
 
     switch_mutex_lock(tech_pvt->mutex);
+
+    // Read pAudioPipe only after taking the lock — eventCallback() (on the
+    // libwebsockets thread) nulls this out under the same lock when the
+    // connection drops or closes gracefully. Reading it unlocked here could
+    // race with that and hand this thread a pointer to an AudioPipe that's
+    // about to be (or already) deleted on the LWS thread.
+    AudioPipe *pAudioPipe = static_cast<AudioPipe *>(tech_pvt->pAudioPipe);
 
     // get the bug again, now that we are under lock
     {
@@ -563,8 +590,6 @@ extern "C" {
             frame.buflen = available = pAudioPipe->binarySpaceAvailable();
             frame.data = pAudioPipe->binaryWritePtr();
             dirty = true;
-            switch_core_session_write_frame(session, &frame, SWITCH_IO_FLAG_NONE, 0);
-	          switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO,"switch_core_session_write_frame");
           }
         }
       }
@@ -607,6 +632,55 @@ extern "C" {
       pAudioPipe->unlockAudioBuffer();
       switch_mutex_unlock(tech_pvt->mutex);
     }
+    return SWITCH_TRUE;
+  }
+
+  switch_bool_t fork_write_frame(switch_core_session_t *session, switch_media_bug_t *bug) {
+    private_t *tech_pvt = (private_t *) switch_core_media_bug_get_user_data(bug);
+    if (!tech_pvt || tech_pvt->audio_paused || tech_pvt->graceful_shutdown) return SWITCH_TRUE;
+
+    if (switch_mutex_trylock(tech_pvt->mutex) != SWITCH_STATUS_SUCCESS) return SWITCH_TRUE;
+
+    AudioPipe *pAudioPipe = static_cast<AudioPipe *>(tech_pvt->pAudioPipe);
+    if (!pAudioPipe || pAudioPipe->getLwsState() != AudioPipe::LWS_CLIENT_CONNECTED) {
+      switch_mutex_unlock(tech_pvt->mutex);
+      return SWITCH_TRUE;
+    }
+
+    switch_frame_t *frame = switch_core_media_bug_get_write_replace_frame(bug);
+    if (!frame || !frame->data) {
+      switch_mutex_unlock(tech_pvt->mutex);
+      return SWITCH_TRUE;
+    }
+
+    const uint32_t frame_bytes = tech_pvt->decoded_bytes_per_packet;
+
+    if (tech_pvt->write_resampler) {
+      const size_t tts_bytes = (size_t)frame_bytes * tech_pvt->sampling
+                               / tech_pvt->actual_samples_per_second;
+      if (pAudioPipe->playbackAvailable() >= tts_bytes) {
+        uint8_t tts_in[SWITCH_RECOMMENDED_BUFFER_SIZE];
+        pAudioPipe->readPlaybackAudio(tts_in, tts_bytes);
+        spx_uint32_t in_samples  = (spx_uint32_t)(tts_bytes / 2);
+        spx_uint32_t out_samples = (spx_uint32_t)(frame_bytes / 2);
+        speex_resampler_process_interleaved_int(
+          tech_pvt->write_resampler,
+          (const spx_int16_t *)tts_in,        &in_samples,
+          (spx_int16_t *)frame->data,          &out_samples);
+        if (out_samples > 0) {
+          frame->datalen = out_samples * 2;
+          frame->samples = out_samples;
+        }
+      }
+    } else {
+      if (pAudioPipe->playbackAvailable() >= frame_bytes) {
+        pAudioPipe->readPlaybackAudio(frame->data, frame_bytes);
+        frame->datalen = frame_bytes;
+        frame->samples = frame_bytes / 2;
+      }
+    }
+
+    switch_mutex_unlock(tech_pvt->mutex);
     return SWITCH_TRUE;
   }
 

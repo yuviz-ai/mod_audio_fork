@@ -4,6 +4,7 @@
 #include <string>
 #include <list>
 #include <mutex>
+#include <atomic>
 
 #include <libwebsockets.h>
 
@@ -80,6 +81,10 @@ public:
 
   void close() ;
 
+  // TTS playback receive buffer — written by the LWS thread, read by fork_frame().
+  size_t playbackAvailable();
+  size_t readPlaybackAudio(void* dst, size_t maxBytes);
+
   // no default constructor or copying
   AudioPipe() = delete;
   AudioPipe(const AudioPipe&) = delete;
@@ -113,7 +118,15 @@ private:
   
   bool connect_client(struct lws_per_vhost_data *vhd);
 
-  LwsState_t m_state;
+  // Written on the libwebsockets service thread (connect_client(),
+  // lws_callback's CLIENT_ESTABLISHED/CLIENT_CLOSED cases), read from the
+  // FreeSWITCH session/hangup thread in close(). Must be atomic: close()'s
+  // check-then-act on this value is the only cross-thread synchronization
+  // for m_vhd (assigned on the writer thread strictly before this becomes
+  // CONNECTED) — without a real happens-before edge here, a hangup racing
+  // a still-settling connection can observe CONNECTED with m_vhd not yet
+  // visible, dereferencing a null m_vhd in addPendingDisconnect().
+  std::atomic<LwsState_t> m_state;
   std::string m_uuid;
   std::string m_host;
   unsigned int m_port;
@@ -136,6 +149,11 @@ private:
   std::string m_username;
   std::string m_password;
   bool m_gracefulShutdown;
+
+  // Inbound TTS audio received as binary WebSocket frames from the gateway.
+  std::vector<uint8_t> m_playback_buf;
+  size_t               m_playback_pos;
+  std::mutex           m_playback_mutex;
 };
 
 #endif

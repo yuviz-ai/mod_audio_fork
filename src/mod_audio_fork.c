@@ -45,6 +45,10 @@ static switch_bool_t capture_callback(switch_media_bug_t *bug, void *user_data, 
 		return fork_frame(session, bug);
 		break;
 
+	case SWITCH_ABC_TYPE_WRITE_REPLACE:
+		return fork_write_frame(session, bug);
+		break;
+
 	case SWITCH_ABC_TYPE_WRITE:
 	default:
 		break;
@@ -204,7 +208,7 @@ SWITCH_STANDARD_API(fork_function)
         unsigned int port;
         int sslFlags;
         int sampling = 8000;
-      	switch_media_bug_flag_t flags = SMBF_READ_STREAM ;
+      	switch_media_bug_flag_t flags = SMBF_READ_STREAM | SMBF_WRITE_REPLACE;
         char *metadata = argc > 5 ? argv[5] : NULL ;
         if (0 == strcmp(argv[3], "mixed")) {
           flags |= SMBF_WRITE_STREAM ;

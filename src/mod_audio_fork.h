@@ -35,7 +35,8 @@ typedef void (*responseHandler_t)(switch_core_session_t* session, const char* ev
 struct private_data {
 	switch_mutex_t *mutex;
 	char sessionId[MAX_SESSION_ID];
-  SpeexResamplerState *resampler;
+  SpeexResamplerState *resampler;        /* caller rate → desired sampling (inbound) */
+  SpeexResamplerState *write_resampler;  /* desired sampling → caller rate (TTS playback) */
   responseHandler_t responseHandler;
   void *pAudioPipe;
   int ws_state;
@@ -43,6 +44,8 @@ struct private_data {
   unsigned int port;
   char path[MAX_PATH_LEN];
   int sampling;
+  uint32_t decoded_bytes_per_packet;     /* bytes per 20ms frame at the call's native rate */
+  uint32_t actual_samples_per_second;    /* call's native sample rate */
   struct playout* playout;
   int  channels;
   unsigned int id;

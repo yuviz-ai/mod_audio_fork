@@ -41,8 +41,26 @@ int AudioPipe::lws_callback(struct lws *wsi,
   enum lws_callback_reasons reason,
   void *user, void *in, size_t len) {
 
-  struct AudioPipe::lws_per_vhost_data *vhd = 
+  struct AudioPipe::lws_per_vhost_data *vhd =
     (struct AudioPipe::lws_per_vhost_data *) lws_protocol_vh_priv_get(lws_get_vhost(wsi), lws_get_protocol(wsi));
+
+  // Fallback: on this build/config (client-only context, CONTEXT_PORT_NO_LISTEN),
+  // LWS_CALLBACK_PROTOCOL_INIT does not reliably fire, so the per-vhost priv data
+  // above is never allocated and vhd stays permanently null - silently stalling
+  // every connect (processPendingConnects/connect_client no-op forever on a null
+  // vhd). lws_get_context/_vhost/_protocol(wsi) are valid on any real wsi
+  // independent of whether priv data was ever allocated, and every call site here
+  // only ever reads vhd->context, so synthesize an equivalent struct instead of
+  // depending on PROTOCOL_INIT. thread_local so each service thread's own
+  // long-lived context is stored separately and stays valid for as long as any
+  // AudioPipe on that thread holds a pointer to it (e.g. via m_vhd).
+  thread_local struct AudioPipe::lws_per_vhost_data fallback_vhd;
+  if (!vhd) {
+    fallback_vhd.context  = lws_get_context(wsi);
+    fallback_vhd.vhost    = lws_get_vhost(wsi);
+    fallback_vhd.protocol = lws_get_protocol(wsi);
+    vhd = &fallback_vhd;
+  }
 
   struct lws_vhost* vhost = lws_get_vhost(wsi);
   AudioPipe ** ppAp = (AudioPipe **) user;
@@ -72,8 +90,10 @@ int AudioPipe::lws_callback(struct lws *wsi,
       break;
 
     case LWS_CALLBACK_EVENT_WAIT_CANCELLED:
-      processPendingConnects(vhd);
-      processPendingDisconnects(vhd);
+      if (vhd) {
+        processPendingConnects(vhd);
+        processPendingDisconnects(vhd);
+      }
       processPendingWrites();
       break;
     case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
@@ -138,7 +158,10 @@ int AudioPipe::lws_callback(struct lws *wsi,
         }
 
         if (lws_frame_is_binary(wsi)) {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_RECEIVE received binary frame, discarding.\n");
+          // TTS audio from the gateway — accumulate into the playback buffer.
+          std::lock_guard<std::mutex> lk(ap->m_playback_mutex);
+          const uint8_t* data = static_cast<const uint8_t*>(in);
+          ap->m_playback_buf.insert(ap->m_playback_buf.end(), data, data + len);
           return 0;
         }
 
@@ -372,10 +395,23 @@ void AudioPipe::addPendingDisconnect(AudioPipe* ap) {
   {
     std::lock_guard<std::mutex> guard(mutex_disconnects);
     pendingDisconnects.push_back(ap);
-    lwsl_notice("%s after adding disconnect there are %lu pending disconnects\n", 
+    lwsl_notice("%s after adding disconnect there are %lu pending disconnects\n",
       ap->m_uuid.c_str(), pendingDisconnects.size());
   }
-  lws_cancel_service(ap->m_vhd->context);
+  // ap->m_vhd is only ever assigned once the connection actually starts
+  // connecting (connect_client()) or is established — the constructor
+  // leaves it null, and this code has observed it still null here in
+  // practice. processPendingDisconnects() walks the whole global
+  // pendingDisconnects list regardless of which vhd/context woke the
+  // service loop, so any live context works to wake it — no need for
+  // ap's own, and no excuse to dereference a pointer this class already
+  // documents as nullable.
+  struct lws_context *wakeCtx = ap->m_vhd ? ap->m_vhd->context : (numContexts > 0 ? contexts[0] : nullptr);
+  if (wakeCtx) {
+    lws_cancel_service(wakeCtx);
+  } else {
+    lwsl_err("%s addPendingDisconnect: no lws context available to wake service thread\n", ap->m_uuid.c_str());
+  }
 }
 void AudioPipe::addPendingWrite(AudioPipe* ap) {
   {
@@ -401,14 +437,14 @@ bool AudioPipe::lws_service_thread(unsigned int nServiceThread) {
   memset(&info, 0, sizeof info); 
   info.port = CONTEXT_PORT_NO_LISTEN; 
   info.protocols = protocols;
-  info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+  info.options = 0;
 
   info.ka_time = nTcpKeepaliveSecs;                    // tcp keep-alive timer
   info.ka_probes = 4;                   // number of times to try ka before closing connection
   info.ka_interval = 5;                 // time between ka's
   info.timeout_secs = 10;                // doc says timeout for "various processes involving network roundtrips"
   info.keepalive_timeout = 5;           // seconds to allow remote client to hold on to an idle HTTP/1.1 connection 
-  info.ws_ping_pong_interval = 20;
+  // info.ws_ping_pong_interval removed in libwebsockets 4.x
   info.timeout_secs_ah_idle = 10;       // secs to allow a client to hold an ah without using it
 
   lwsl_notice("AudioPipe::lws_service_thread creating context in service thread %d.\n", nServiceThread);
@@ -432,6 +468,7 @@ void AudioPipe::initialize(const char* protocol, unsigned int nThreads, int logl
   assert(!lws_initialized);
   assert(nThreads > 0 && nThreads <= 10);
 
+  lws_stopping = false;
   numContexts = nThreads;
   protocolName = protocol;
   lws_set_log_level(loglevel, logger);
@@ -471,8 +508,9 @@ AudioPipe::AudioPipe(const char* uuid, const char* host, unsigned int port, cons
   int sslFlags, size_t bufLen, size_t minFreespace, const char* username, const char* password, notifyHandler_t callback) :
   m_uuid(uuid), m_host(host), m_port(port), m_path(path), m_sslFlags(sslFlags),
   m_audio_buffer_min_freespace(minFreespace), m_audio_buffer_max_len(bufLen), m_gracefulShutdown(false),
-  m_audio_buffer_write_offset(LWS_PRE), m_recv_buf(nullptr), m_recv_buf_ptr(nullptr), 
-  m_state(LWS_CLIENT_IDLE), m_wsi(nullptr), m_vhd(nullptr), m_callback(callback) {
+  m_audio_buffer_write_offset(LWS_PRE), m_recv_buf(nullptr), m_recv_buf_ptr(nullptr),
+  m_state(LWS_CLIENT_IDLE), m_wsi(nullptr), m_vhd(nullptr), m_callback(callback),
+  m_playback_pos(0) {
 
   if (username && password) {
     m_username.assign(username);
@@ -538,4 +576,26 @@ void AudioPipe::close() {
 void AudioPipe::do_graceful_shutdown() {
   m_gracefulShutdown = true;
   addPendingWrite(this);
+}
+
+size_t AudioPipe::playbackAvailable() {
+  std::lock_guard<std::mutex> lk(m_playback_mutex);
+  return m_playback_buf.size() - m_playback_pos;
+}
+
+size_t AudioPipe::readPlaybackAudio(void* dst, size_t maxBytes) {
+  std::lock_guard<std::mutex> lk(m_playback_mutex);
+  size_t avail = m_playback_buf.size() - m_playback_pos;
+  size_t n = std::min(maxBytes, avail);
+  if (n > 0) {
+    memcpy(dst, m_playback_buf.data() + m_playback_pos, n);
+    m_playback_pos += n;
+    // Compact once we've consumed a significant chunk to avoid unbounded growth.
+    if (m_playback_pos >= 65536) {
+      m_playback_buf.erase(m_playback_buf.begin(),
+                           m_playback_buf.begin() + m_playback_pos);
+      m_playback_pos = 0;
+    }
+  }
+  return n;
 }
