@@ -46,6 +46,8 @@ public:
   LwsState_t getLwsState(void) { return m_state; }
   void connect(void);
   void bufferForSending(const char* text);
+  // Queued before connect() and sent as the first frame once established.
+  void queueBeforeConnect(const char* text);
   size_t binarySpaceAvailable(void) {
     return m_audio_buffer_max_len - m_audio_buffer_write_offset;
   }

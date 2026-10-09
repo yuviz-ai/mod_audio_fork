@@ -116,10 +116,16 @@ int AudioPipe::lws_callback(struct lws *wsi,
           *ppAp = ap;
           ap->m_vhd = vhd;
           ap->m_state = LWS_CLIENT_CONNECTED;
+          // Send queued metadata now rather than from the CONNECT_SUCCESS handler,
+          // which runs before the media bug exists when the handshake is fast.
+          {
+            std::lock_guard<std::mutex> lk(ap->m_text_mutex);
+            if (!ap->m_metadata.empty()) lws_callback_on_writable(wsi);
+          }
           ap->m_callback(ap->m_uuid.c_str(), AudioPipe::CONNECT_SUCCESS, NULL);
         }
         else {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_ESTABLISHED %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
+          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_ESTABLISHED unable to find wsi %p..\n", wsi);
         }
       }      
       break;
@@ -127,7 +133,7 @@ int AudioPipe::lws_callback(struct lws *wsi,
       {
         AudioPipe* ap = *ppAp;
         if (!ap) {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_CLOSED %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
+          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_CLOSED unable to find wsi %p..\n", wsi); 
           return 0;
         }
         if (ap->m_state == LWS_CLIENT_DISCONNECTING) {
@@ -153,7 +159,7 @@ int AudioPipe::lws_callback(struct lws *wsi,
       {
         AudioPipe* ap = *ppAp;
         if (!ap) {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_RECEIVE %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
+          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_RECEIVE unable to find wsi %p..\n", wsi); 
           return 0;
         }
 
@@ -215,7 +221,7 @@ int AudioPipe::lws_callback(struct lws *wsi,
       {
         AudioPipe* ap = *ppAp;
         if (!ap) {
-          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_WRITEABLE %s unable to find wsi %p..\n", ap->m_uuid.c_str(), wsi); 
+          lwsl_err("AudioPipe::lws_service_thread LWS_CALLBACK_CLIENT_WRITEABLE unable to find wsi %p..\n", wsi); 
           return 0;
         }
 
@@ -552,6 +558,11 @@ bool AudioPipe::connect_client(struct lws_per_vhost_data *vhd) {
   lwsl_notice("%s attempting connection, wsi is %p\n", m_uuid.c_str(), m_wsi);
 
   return nullptr != m_wsi;
+}
+
+void AudioPipe::queueBeforeConnect(const char* text) {
+  std::lock_guard<std::mutex> lk(m_text_mutex);
+  m_metadata.append(text);
 }
 
 void AudioPipe::bufferForSending(const char* text) {

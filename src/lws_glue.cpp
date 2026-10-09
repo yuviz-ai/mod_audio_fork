@@ -168,11 +168,6 @@ namespace {
             case AudioPipe::CONNECT_SUCCESS:
               switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "connection successful\n");
               tech_pvt->responseHandler(session, EVENT_CONNECT_SUCCESS, NULL);
-              if (strlen(tech_pvt->initialMetadata) > 0) {
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "sending initial metadata %s\n", tech_pvt->initialMetadata);
-                AudioPipe *pAudioPipe = static_cast<AudioPipe *>(tech_pvt->pAudioPipe);
-                pAudioPipe->bufferForSending(tech_pvt->initialMetadata);
-              }
             break;
             case AudioPipe::CONNECT_FAIL:
             {
@@ -209,6 +204,10 @@ namespace {
             break;
           }
         }
+      }
+      else {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG,
+          "eventCallback: event %d dropped, media bug not attached yet\n", (int) event);
       }
       switch_core_session_rwunlock(session);
     }
@@ -435,6 +434,10 @@ extern "C" {
     *ppUserData = tech_pvt;
 
     AudioPipe *pAudioPipe = static_cast<AudioPipe *>(tech_pvt->pAudioPipe);
+    if (strlen(tech_pvt->initialMetadata) > 0) {
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "queued initial metadata %s\n", tech_pvt->initialMetadata);
+      pAudioPipe->queueBeforeConnect(tech_pvt->initialMetadata);
+    }
     pAudioPipe->connect();
     return SWITCH_STATUS_SUCCESS;
   }
